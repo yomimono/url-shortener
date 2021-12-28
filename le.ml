@@ -1,11 +1,24 @@
+module Shim(Cohttp_client : Cohttp_lwt.S.Client) = struct
+  module Headers = Cohttp.Header
+  module Response = struct
+    include Cohttp.Response
+    let status t = Cohttp.Response.status t |> Cohttp.Code.code_of_status
+  end
+  module Body = Cohttp_lwt__.Body
+  include Cohttp_client
+
+
+end
+
 module Make
     (Time : Mirage_time.S)
     (Http_server : Cohttp_mirage.Server.S)
     (Http_client : Cohttp_lwt.S.Client)
 = struct
-  module Acme = Letsencrypt.Client.Make(Http_client)
+  module Http_client_shim = Shim(Http_client)
+  module Acme = Letsencrypt.Client.Make(Http_client_shim)
 
-  let host = "somerandomidiot.com"
+  let host = "yomimono.net"
   let http_port = 80
   let https_port = 443
 
@@ -72,7 +85,8 @@ module Make
       (* The choice to `exit` here is debatable - we could return and serve on HTTP only *)
       exit 1
     | Ok csr ->
-      Acme.initialise ~ctx ~endpoint (Mirage_crypto_pk.Rsa.generate ~bits:4096 ()) >>= fun lets_encrypt ->
+      let http_connection_pk = Mirage_crypto_pk.Rsa.generate ~bits:4096 () in
+      Acme.initialise ~ctx ~endpoint (`RSA http_connection_pk) >>= fun lets_encrypt ->
       let sleep sec = Time.sleep_ns (Duration.of_sec sec) in
       let solver = Letsencrypt.Client.http_solver solver in
       Acme.sign_certificate ~ctx solver lets_encrypt sleep csr >|= 
