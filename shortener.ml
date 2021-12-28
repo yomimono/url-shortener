@@ -1,6 +1,7 @@
 module Main
     (Block : Mirage_block.S)
     (Clock : Mirage_clock.PCLOCK)
+    (Time : Mirage_time.S)
     (Http : Cohttp_mirage.Server.S)
     (Client : Cohttp_lwt.S.Client)
 = struct
@@ -9,7 +10,7 @@ module Main
 
   module LE = Le.Make(Time)(Http)(Client)
 
-  let start block pclock _http =
+  let start block pclock _time _http_server _http_client =
     let open Lwt.Infix in
     Logs_reporter.(create pclock |> run) @@ fun () ->
     Kv.connect ~program_block_size:16 ~block_size:4096 block >>= fun kv ->

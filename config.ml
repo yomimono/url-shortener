@@ -11,12 +11,13 @@ let packages = [
 ]
 
 let stack = generic_stackv4v6 default_network
-let http_srv = cohttp_server @@ conduit_direct stack
-
+let conduit = conduit_direct stack
+let http_srv = cohttp_server conduit
+let http_client_imp = cohttp_client (resolver_dns stack) conduit
 let block_imp = generic_block "shortener"
 
 let main =
-  foreign ~packages ~keys:[] "Shortener.Main" (block @-> pclock @-> http @-> job)
+  foreign ~packages ~keys:[] "Shortener.Main" (block @-> pclock @-> time @-> http @-> http_client @-> job)
 
 let () =
-  register "shortener" [ main $ block_imp $ default_posix_clock $ http_srv ]
+  register "shortener" [ main $ block_imp $ default_posix_clock $ default_time $ http_srv $ http_client_imp ]
