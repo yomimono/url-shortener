@@ -14,7 +14,7 @@ let stack = generic_stackv4v6 default_network
 let conduit = conduit_direct stack
 let http_srv = cohttp_server conduit
 let http_client_imp = cohttp_client (resolver_dns stack) conduit
-let block_imp = generic_block "shortener"
+let block_imp = block_of_file "shortener"
 
 let main =
   foreign ~packages ~keys:[] "Shortener.Main" (block @-> pclock @-> time @-> http @-> http_client @-> job)

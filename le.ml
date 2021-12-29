@@ -99,7 +99,7 @@ module Make
     in
     Http_server.make ~conn_closed ~callback ()
 
-  let rec provision http_server_impl http_client https_dispatch =
+  let rec provision http_server_impl http_client =
     let open Lwt.Infix in
     Logs.info (fun m -> m "listening on tcp/%d for Let's Encrypt provisioning" http_port);
     (* "this should be cancelled once certificates are retrieved",
@@ -109,7 +109,7 @@ module Make
     | Error (`Msg s) -> Logs.err (fun f -> f "error provisioning TLS certificate: %s" s);
       (* Since the error may be transient, wait a bit and try again *)
       Time.sleep_ns (Duration.of_min 15) >>= fun () ->
-      provision http_server_impl http_client https_dispatch
+      provision http_server_impl http_client
     | Ok certificates ->
       Lwt.return certificates
 
