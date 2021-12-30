@@ -1,31 +1,54 @@
 open Lwt.Infix
 
 module Webapp
+    (Clock : Mirage_clock.PCLOCK)
     (KV : Mirage_kv.RW)
     (H : Cohttp_mirage.Server.S) = struct
-  let reply (kv : KV.t) =
+
+  let special = [ "/uptime"; "/rules"; "/status" ]
+
+  let not_found =  (
+    Cohttp.Response.make ~status:Cohttp.Code.(`Not_found) (),
+    Cohttp_lwt__.Body.of_string "Not found")
+
+  let uptime start_time =
+    let response = Cohttp.Response.make ~status:Cohttp.Code.(`OK) () in
+    let span = Ptime.Span.sub (Ptime.Span.v @@ Pclock.now_d_ps ()) (Ptime.to_span start_time) in
+    let s = Format.asprintf "%a (since %a)" Ptime.Span.pp span (Ptime.pp_human ()) start_time in
+    (response, Cohttp_lwt__.Body.of_string s)
+
+  let get_special start_time path =
+    if String.equal path "/uptime"
+    then uptime start_time
+    else not_found
+
+  let get_from_database kv path =
+    KV.get kv @@ Mirage_kv.Key.v path >>= function
+    | Error (`Not_found k) ->
+      let response = Cohttp.Response.make ~status:Cohttp.Code.(`Not_found) () in
+      let body = Cohttp_lwt__.Body.of_string "Not found" in
+      Lwt.return (response, body)
+    | Error e ->
+      Logs.err (fun f -> f "error %a fetching a key from the database" KV.pp_error e);
+      let response = Cohttp.Response.make ~status:Cohttp.Code.(`Internal_server_error) () in
+      let body = Cohttp_lwt__.Body.of_string "Internal Server Error" in
+      Lwt.return (response, body)
+    | Ok data ->
+      let loc = Cohttp.Header.init_with "Location" data in
+      let response = Cohttp.Response.make ~status:Cohttp.Code.(`Temporary_redirect) ~headers:loc () in
+      let body = Cohttp_lwt__.Body.empty in
+      Lwt.return (response, body)
+
+  let reply (kv : KV.t) start_time =
     let callback _connection request body =
       match Cohttp.Request.meth request with
       | `GET -> begin
-        let path = Uri.path @@ Cohttp.Request.uri request in
-        KV.get kv @@ Mirage_kv.Key.v path >>= function
-        | Error (`Not_found k) ->
-          Logs.debug (fun f -> f "key %a not found" Mirage_kv.Key.pp k);
-          let response = Cohttp.Response.make ~status:Cohttp.Code.(`Not_found) () in
-          let body = Cohttp_lwt__.Body.of_string "Not found" in
-          Lwt.return (response, body)
-        | Error e ->
-          Logs.err (fun f -> f "error %a fetching a key from the database" KV.pp_error e);
-          let response = Cohttp.Response.make ~status:Cohttp.Code.(`Internal_server_error) () in
-          let body = Cohttp_lwt__.Body.of_string "Internal Server Error" in
-          Lwt.return (response, body)
-        | Ok data ->
-          let loc = Cohttp.Header.init_with "Location" data in
-          let response = Cohttp.Response.make ~status:Cohttp.Code.(`Temporary_redirect) ~headers:loc () in
-          let body = Cohttp_lwt__.Body.empty in
-          Lwt.return (response, body)
+        let path = Uri.path @@ Uri.canonicalize @@ Cohttp.Request.uri request in
+        if List.mem path special then Lwt.return @@ get_special start_time path
+        else get_from_database kv path
       end
       | `POST -> begin
+        let path = Uri.path @@ Uri.canonicalize @@ Cohttp.Request.uri request in
         let response = Cohttp.Response.make () in
         let body = Cohttp_lwt__.Body.empty in
         Lwt.return (response, body)
@@ -48,10 +71,11 @@ module Main
   module Logs_reporter = Mirage_logs.Make(Clock)
   module LE = Le.Make(Time)(Http)(Client)
   module Database = Kv.Make(Block)(Clock)
-  module Shortener = Webapp(Database)(Http)
+  module Shortener = Webapp(Clock)(Database)(Http)
 
   let start block pclock _time http_server http_client =
     let open Lwt.Infix in
+    let start_time = Ptime.v @@ Pclock.now_d_ps () in
     Logs_reporter.(create pclock |> run) @@ fun () ->
     (* solo5 requires us to use a block size of, at maximum, 512 *)
     Database.connect ~program_block_size:16 ~block_size:512 block >>= function
@@ -77,5 +101,5 @@ module Main
     in
     provision ()
        *)
-    http_server (`TCP 80) @@ Shortener.reply kv
+    http_server (`TCP 80) @@ Shortener.reply kv start_time
 end
