@@ -53,7 +53,8 @@ module Main
   let start block pclock _time http_server http_client =
     let open Lwt.Infix in
     Logs_reporter.(create pclock |> run) @@ fun () ->
-    Database.connect ~program_block_size:16 ~block_size:4096 block >>= function
+    (* solo5 requires us to use a block size of, at maximum, 512 *)
+    Database.connect ~program_block_size:16 ~block_size:512 block >>= function
     | Error e -> Logs.err (fun f -> f "failed to initialize block-backed key-value store: %a" Database.pp_error e);
       Lwt.return_unit
     | Ok kv ->
