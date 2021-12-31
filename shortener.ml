@@ -5,11 +5,33 @@ module Webapp
     (KV : Mirage_kv.RW)
     (H : Cohttp_mirage.Server.S) = struct
 
-  let special = [ "/uptime"; "/rules"; "/status" ]
+  let reserved = [ "/uptime"; "/new"; "/status"; "/" ]
 
-  let not_found =  (
+  let not_found = (
     Cohttp.Response.make ~status:Cohttp.Code.(`Not_found) (),
     Cohttp_lwt__.Body.of_string "Not found")
+
+  let ise = (
+    Cohttp.Response.make ~status:Cohttp.Code.(`Internal_server_error) (),
+    Cohttp_lwt__.Body.of_string "Internal server error")
+
+  let bad_request = (
+    Cohttp.Response.make ~status:Cohttp.Code.(`Bad_request) (),
+    Cohttp_lwt__.Body.of_string "Bad request")
+
+  let slash =
+    let form = "<form method=\"POST\" action=\"/new\">
+      <label>Short name: 
+        <input type=\"text\" required=\"true\" id=\"short\" name=\"short_name\" />
+      </label>
+      <label> URL:
+        <input type=\"text\" required=\"true\" id=\"target\" name=\"url\"/>
+      </label>
+      <button type=\"submit\">Submit</button>
+      </form>"
+    in
+    (Cohttp.Response.make ~status:Cohttp.Code.(`OK) (),
+    Cohttp_lwt__.Body.of_string form)
 
   let uptime start_time =
     let response = Cohttp.Response.make ~status:Cohttp.Code.(`OK) () in
@@ -17,9 +39,10 @@ module Webapp
     let s = Format.asprintf "%a (since %a)" Ptime.Span.pp span (Ptime.pp_human ()) start_time in
     (response, Cohttp_lwt__.Body.of_string s)
 
-  let get_special start_time path =
-    if String.equal path "/uptime"
-    then uptime start_time
+  let get_reserved start_time path =
+    if String.equal path "/uptime" then uptime start_time
+    else if String.equal path "/favicon.ico" then not_found
+    else if String.equal path "/" then slash
     else not_found
 
   let get_from_database kv path =
@@ -39,20 +62,63 @@ module Webapp
       let body = Cohttp_lwt__.Body.empty in
       Lwt.return (response, body)
 
-  let reply (kv : KV.t) start_time =
+  let validate_uri ~hostname s =
+    let uri = Uri.of_string s |> Uri.canonicalize in
+    match Uri.scheme uri with
+    | None -> None
+    | Some scheme ->
+      (* we support only http and https *)
+      if not @@ String.equal scheme "http" || String.equal scheme "https" then None
+      else begin
+        (* hostname shouldn't be our own hostname *)
+        match Uri.host uri with
+        | None -> None
+        | Some h when String.equal h hostname -> None
+        | Some _ ->
+          (* please don't share your usernames and passwords with me,
+           * even if you like me a lot *)
+          match Uri.user uri, Uri.password uri with
+          | None, None -> Some uri
+          | _, _ -> None
+      end
+
+  let maybe_set kv hostname path url =
+    Logs.debug (fun f -> f "valid-looking POST request received; checking to see whether we have it in the db already");
+    (* arbitrarily, shortcuts cannot be longer than 128 characters *)
+    if String.length path > 128 then Lwt.return bad_request
+    else begin
+      KV.exists kv @@ Mirage_kv.Key.v path >>= function
+      | Error e ->
+        Logs.err (fun f -> f "error %a trying to post a url" KV.pp_error e);
+        Lwt.return ise
+      | Ok (Some _) ->
+        let response = Cohttp.Response.make ~status:Cohttp.Code.(`Conflict) () in
+        let body = Cohttp_lwt__.Body.of_string "there's already a URL set there. Try choosing another" in
+        Lwt.return (response, body)
+      | Ok None ->
+        match validate_uri ~hostname url with
+        | None -> Lwt.return bad_request
+        | Some url ->
+          Logs.debug (fun f -> f "would set a new key if we knew how");
+          let response = Cohttp.Response.make ~status:Cohttp.Code.(`Method_not_allowed) () in
+          let response_body = Cohttp_lwt__.Body.empty in
+          Lwt.return (response, response_body)
+    end
+
+  let reply (kv : KV.t) hostname start_time =
     let callback _connection request body =
       match Cohttp.Request.meth request with
       | `GET -> begin
         let path = Uri.path @@ Uri.canonicalize @@ Cohttp.Request.uri request in
-        if List.mem path special then Lwt.return @@ get_special start_time path
+        if List.mem path reserved then Lwt.return @@ get_reserved start_time path
         else get_from_database kv path
       end
       | `POST -> begin
-        let path = Uri.path @@ Uri.canonicalize @@ Cohttp.Request.uri request in
-        let response = Cohttp.Response.make () in
-        let body = Cohttp_lwt__.Body.empty in
-        Lwt.return (response, body)
-      end
+          Cohttp_lwt__.Body.to_form body >>= fun form_entries ->
+          match List.assoc_opt "short_name" form_entries, List.assoc_opt "url" form_entries with
+          | Some (path::[]), Some (url::[]) when not @@ List.mem path reserved -> maybe_set kv hostname path url
+          | _, _ -> Lwt.return bad_request
+        end
       | _ ->
         let response = Cohttp.Response.make ~status:Cohttp.Code.(`Method_not_allowed) () in
         let body = Cohttp_lwt__.Body.empty in
@@ -76,6 +142,7 @@ module Main
   let start block pclock _time http_server http_client =
     let open Lwt.Infix in
     let start_time = Ptime.v @@ Pclock.now_d_ps () in
+    let host = "yomimono.net" in
     Logs_reporter.(create pclock |> run) @@ fun () ->
     (* solo5 requires us to use a block size of, at maximum, 512 *)
     Database.connect ~program_block_size:16 ~block_size:512 block >>= function
@@ -85,13 +152,13 @@ module Main
     Logs.info (fun f -> f "block-backed key-value store up and running");
     (*
     let rec provision () =
-      LE.provision http_server http_client >>= fun certificates ->
+      LE.provision host http_server http_client >>= fun certificates ->
       Logs.info (fun f -> f "got certificates from let's encrypt via acme");
       let tls_cfg = Tls.Config.server ~certificates () in
       let tls = `TLS (tls_cfg, `TCP 443) in
       let https =
         Logs.info (fun f -> f "(re-)initialized https listener");
-        http_server tls @@ Shortener.reply
+        http_server tls @@ Shortener.reply host
       in
       let expire = Time.sleep_ns @@ Duration.of_day 80 in
       Lwt.pick [
@@ -101,5 +168,5 @@ module Main
     in
     provision ()
        *)
-    http_server (`TCP 80) @@ Shortener.reply kv start_time
+    http_server (`TCP 80) @@ Shortener.reply kv host start_time
 end

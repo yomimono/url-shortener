@@ -18,14 +18,13 @@ module Make
   module Http_client_shim = Shim(Http_client)
   module Acme = Letsencrypt.Client.Make(Http_client_shim)
 
-  let host = "yomimono.net"
   let http_port = 80
   let https_port = 443
 
-  let cn = X509.[Distinguished_name.(Relative_distinguished_name.singleton (CN host))]
+  let cn host = X509.[Distinguished_name.(Relative_distinguished_name.singleton (CN host))]
 
-  let csr key =
-    X509.Signing_request.create cn key
+  let csr host key =
+    X509.Signing_request.create (cn host) key
 
   let prefix = ".well-known", "acme-challenge"
   let tokens = Hashtbl.create 1
@@ -61,7 +60,7 @@ module Make
        * which might know what to do *)
       Http_server.respond ~status:`Not_found ~body:`Empty ()
 
-  let provision_certificate ctx =
+  let provision_certificate host ctx =
     let open Lwt_result.Infix in
     let endpoint =
       (* the example code contains a switch here for a production key,
@@ -79,7 +78,7 @@ module Make
      * here if it's been provided.  We DGAF so just let generate
      * handle it. *)
     let priv = `RSA (Mirage_crypto_pk.Rsa.generate ~bits:4096 ()) in
-    match csr priv with
+    match csr host priv with
     | Error (`Msg err) ->
       Logs.err (fun m -> m "couldn't create signing request for our key: %s" err);
       (* The choice to `exit` here is debatable - we could return and serve on HTTP only *)
@@ -99,17 +98,17 @@ module Make
     in
     Http_server.make ~conn_closed ~callback ()
 
-  let rec provision http_server_impl http_client =
+  let rec provision host http_server_impl http_client =
     let open Lwt.Infix in
     Logs.info (fun m -> m "listening on tcp/%d for Let's Encrypt provisioning" http_port);
     (* "this should be cancelled once certificates are retrieved",
      * says the source material *)
     Lwt.async (fun () -> http_server_impl (`TCP http_port) @@ serve letsencrypt_dispatch);
-    provision_certificate http_client >>= function
+    provision_certificate host http_client >>= function
     | Error (`Msg s) -> Logs.err (fun f -> f "error provisioning TLS certificate: %s" s);
       (* Since the error may be transient, wait a bit and try again *)
       Time.sleep_ns (Duration.of_min 15) >>= fun () ->
-      provision http_server_impl http_client
+      provision host http_server_impl http_client
     | Ok certificates ->
       Lwt.return certificates
 
