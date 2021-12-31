@@ -5,7 +5,7 @@ module Webapp
     (KV : Mirage_kv.RW)
     (H : Cohttp_mirage.Server.S) = struct
 
-  let reserved = [ "/uptime"; "/new"; "/status"; "/" ]
+  let reserved = [ "/uptime"; "/new"; "/status"; "/"; "/favicon.ico" ]
 
   let not_found = (
     Cohttp.Response.make ~status:Cohttp.Code.(`Not_found) (),
@@ -67,19 +67,24 @@ module Webapp
     match Uri.scheme uri with
     | None -> None
     | Some scheme ->
+      Logs.debug (fun f -> f "uri seems to have a scheme: %S" scheme);
       (* we support only http and https *)
-      if not @@ String.equal scheme "http" || String.equal scheme "https" then None
+      if not (String.equal scheme "http" || String.equal scheme "https") then None
       else begin
         (* hostname shouldn't be our own hostname *)
+        Logs.debug (fun f -> f "uri scheme was valid");
         match Uri.host uri with
         | None -> None
         | Some h when String.equal h hostname -> None
         | Some _ ->
+          Logs.debug (fun f -> f "hostname isn't our own hostname");
           (* please don't share your usernames and passwords with me,
            * even if you like me a lot *)
           match Uri.user uri, Uri.password uri with
           | None, None -> Some uri
-          | _, _ -> None
+          | _, _ ->
+            Logs.debug (fun f -> f "refusing to save HTTP basic auth");
+            None
       end
 
   let maybe_set kv hostname path url =
@@ -97,12 +102,19 @@ module Webapp
         Lwt.return (response, body)
       | Ok None ->
         match validate_uri ~hostname url with
-        | None -> Lwt.return bad_request
+        | None ->
+          Logs.debug (fun f -> f "url failed validation test");
+          Lwt.return bad_request
         | Some url ->
-          Logs.debug (fun f -> f "would set a new key if we knew how");
-          let response = Cohttp.Response.make ~status:Cohttp.Code.(`Method_not_allowed) () in
-          let response_body = Cohttp_lwt__.Body.empty in
-          Lwt.return (response, response_body)
+          KV.set kv (Mirage_kv.Key.v path) (Uri.to_string url) >>= function
+          | Error e ->
+            Logs.err (fun m -> m "error setting key: %a" KV.pp_write_error e);
+            Lwt.return ise
+          | Ok () ->
+            Logs.debug (fun f -> f "set a new key");
+            let response = Cohttp.Response.make ~status:Cohttp.Code.(`Created) () in
+            let response_body = Cohttp_lwt__.Body.of_string "Success! Your shortcut has been created." in
+            Lwt.return (response, response_body)
     end
 
   let reply (kv : KV.t) hostname start_time =
