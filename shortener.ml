@@ -154,7 +154,7 @@ module Main
   let start block pclock _time http_server http_client =
     let open Lwt.Infix in
     let start_time = Ptime.v @@ Pclock.now_d_ps () in
-    let host = "yomimono.net" in
+    let host = Key_gen.host () in
     Logs_reporter.(create pclock |> run) @@ fun () ->
     (* solo5 requires us to use a block size of, at maximum, 512 *)
     Database.connect ~program_block_size:16 ~block_size:512 block >>= function
@@ -162,23 +162,26 @@ module Main
       Lwt.return_unit
     | Ok kv ->
     Logs.info (fun f -> f "block-backed key-value store up and running");
-    (*
     let rec provision () =
       LE.provision host http_server http_client >>= fun certificates ->
       Logs.info (fun f -> f "got certificates from let's encrypt via acme");
       let tls_cfg = Tls.Config.server ~certificates () in
       let tls = `TLS (tls_cfg, `TCP 443) in
+      let tcp = `TCP 80 in
       let https =
         Logs.info (fun f -> f "(re-)initialized https listener");
-        http_server tls @@ Shortener.reply host
+        http_server tls @@ Shortener.reply kv host start_time
+      in
+      let http =
+        Logs.info (fun f -> f "overwriting Let's Encrypt http listener with ours");
+        http_server tcp @@ Shortener.reply kv host start_time
       in
       let expire = Time.sleep_ns @@ Duration.of_day 80 in
       Lwt.pick [
         https
+      ; http
       ; expire] >>= fun () ->
       provision ()
     in
     provision ()
-       *)
-    http_server (`TCP 80) @@ Shortener.reply kv host start_time
 end

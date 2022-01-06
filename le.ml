@@ -103,7 +103,8 @@ module Make
     Logs.info (fun m -> m "listening on tcp/%d for Let's Encrypt provisioning" http_port);
     (* "this should be cancelled once certificates are retrieved",
      * says the source material *)
-    Lwt.async (fun () -> http_server_impl (`TCP http_port) @@ serve letsencrypt_dispatch);
+    let letsencrypt_http_server = http_server_impl (`TCP http_port) @@ serve letsencrypt_dispatch in
+    Lwt.dont_wait (fun () -> letsencrypt_http_server) (fun _ex -> ());
     provision_certificate host http_client >>= function
     | Error (`Msg s) -> Logs.err (fun f -> f "error provisioning TLS certificate: %s" s);
       (* Since the error may be transient, wait a bit and try again *)
