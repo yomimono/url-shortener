@@ -14,7 +14,7 @@ let stack = generic_stackv4v6 default_network
 let conduit = conduit_direct ~tls:true stack
 let http_srv = cohttp_server conduit
 let http_client_imp = cohttp_client (resolver_dns stack) conduit
-let block_imp = block_of_file "shortener"
+let block_imp = block_of_file "url-shortener-db.img"
 
 let host =
   let doc = Key.Arg.info ~doc:"Fully-qualified domain name for the server. Certificates will be requested from Let's Encrypt for this name." ["host"] in
