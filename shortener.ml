@@ -89,6 +89,7 @@ module Webapp
 
   let maybe_set kv hostname path url =
     Logs.debug (fun f -> f "valid-looking POST request received; checking to see whether we have it in the db already");
+    let path = Uri.pct_encode path in
     (* arbitrarily, shortcuts cannot be longer than 128 characters *)
     if String.length path > 128 then Lwt.return bad_request
     else begin
