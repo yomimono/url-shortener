@@ -203,16 +203,17 @@ module Webapp
 end
 
 module Main
-    (Block : Mirage_block.S)
+    (Database : Mirage_kv.RW)
     (Clock : Mirage_clock.PCLOCK)
     (Time : Mirage_time.S)
     (Stack : Tcpip.Stack.V4V6)
+    (DNS : Dns_client_mirage.S with type Transport.stack = Stack.t)
 = struct
   module Logs_reporter = Mirage_logs.Make(Clock)
   module Paf = Paf_mirage.Make(Time)(Stack.TCP)
   module LE = LE.Make(Time)(Stack)
-  module Database = Kv.Make(Block)(Clock)
   module Shortener = Webapp(Clock)(Database)
+  module Nss = Ca_certs_nss.Make(Pclock)
 
   let ignore_error_handler _ ?request:_ _ _ = ()
 
@@ -232,20 +233,20 @@ module Main
         ~production:true cfg
         (LE.ctx ~gethostbyname ~authenticator dns stack) >>= fun res ->
       Lwt_switch.turn_off stop >>= fun () -> Lwt.return res in
-    Lwt.both (th0, th1) >>= function
+    Lwt.both th0 th1 >>= function
     | ((), Error (`Msg err)) -> failwith err
     | ((), Ok certificates) -> Lwt.return certificates
 
-  let start block pclock _time stack =
+  let start kv pclock _time stack dns =
     let open Lwt.Infix in
     let start_time = Ptime.v @@ Pclock.now_d_ps () in
     let host = Key_gen.host () in
     Logs_reporter.(create pclock |> run) @@ fun () ->
     (* solo5 requires us to use a block size of, at maximum, 512 *)
-    Database.connect ~program_block_size:16 ~block_size:512 block >>= function
+    (* Database.connect ~program_block_size:16 ~block_size:512 block >>= function
     | Error e -> Logs.err (fun f -> f "failed to initialize block-backed key-value store: %a" Database.pp_error e);
       Lwt.return_unit
-    | Ok kv ->
+    | Ok kv -> *)
     Logs.info (fun f -> f "block-backed key-value store up and running");
     match Key_gen.tls () with
     | false ->
@@ -259,14 +260,13 @@ module Main
     | true ->
       let cfg =
         { LE.certificate_seed= None
-        ; LE.certificate_key= None
-        ; LE.certificate_key_type= None
+        ; LE.certificate_key_type= `ED25519
         ; LE.certificate_key_bits= None
         ; LE.email= None
         ; LE.account_seed= None
-        ; LE.account_key_type= None
+        ; LE.account_key_type= `ED25519
         ; LE.account_key_bits= None
-        ; LE.hostname= Key_gen.hostname ()
+        ; LE.hostname= Key_gen.host ()
                        |> Domain_name.of_string_exn
                        |> Domain_name.host_exn } in
       let rec provision () =
@@ -278,7 +278,7 @@ module Main
         let https = Paf.https_service ~tls ~error_handler:ignore_error_handler
           request_handler in
         let stop = Lwt_switch.create () in
-        let `Initialized th0 = Paf.serve ~stop t https in
+        let `Initialized th0 = Paf.serve ~stop https service in
         let expire () = Time.sleep_ns (Duration.of_day 80) >>= fun () ->
           Lwt_switch.turn_off stop in
         Lwt.pick [ th0; expire () ] >>= provision in

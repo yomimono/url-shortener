@@ -4,7 +4,6 @@ open Mirage
 
 let packages = [
   package "uri";
-  package ~sublibs:["kv"] "chamelon";
   package ~sublibs:["ocaml"] "digestif";
   package ~sublibs:["ocaml"] "checkseum";
   package "paf";
@@ -25,13 +24,18 @@ let port =
   let doc = Key.Arg.info ~doc:"Port where the HTTP(S) must listen." ["port"] in
   Key.(create "port" Arg.(opt (some int) None doc))
 
+let program_block_size =
+  let doc = Key.Arg.info ~doc:"Program block size." [ "program-block-size" ] in
+  Key.(create "program_block_size" Arg.(opt int 16 doc))
+
 let keys = [ Key.v host; Key.v tls; Key.v port ]
 
 let main =
-  foreign ~packages ~keys "Shortener.Main" (block @-> pclock @-> time @-> stackv4v6 @-> job)
+  foreign ~packages ~keys "Shortener.Main" (kv_rw @-> pclock @-> time @-> stackv4v6 @-> dns_client @-> job)
 
 let stack = generic_stackv4v6 default_network
-let block = block_of_file "db"
+let block = chamelon ~program_block_size (block_of_file "db")
+let dns = generic_dns_client stack
 
 let () =
-  register "shortener" [ main $ block $ default_posix_clock $ default_time $ stack ]
+  register "shortener" [ main $ block $ default_posix_clock $ default_time $ stack $ dns ]
