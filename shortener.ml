@@ -268,11 +268,11 @@ module Main
     | true ->
       let cfg =
         { LE.certificate_seed= None
-        ; LE.certificate_key_type= `ED25519
+        ; LE.certificate_key_type= `RSA
         ; LE.certificate_key_bits= None
         ; LE.email= None
         ; LE.account_seed= None
-        ; LE.account_key_type= `ED25519
+        ; LE.account_key_type= `RSA
         ; LE.account_key_bits= None
         ; LE.hostname= Key_gen.host ()
                        |> Domain_name.of_string_exn
