@@ -22,7 +22,11 @@ module Webapp
 
   let slash reqd =
     let form =
-{html|<form method="post" enctype="multipart/form-data" action="/new">
+{html|<!doctype html>
+<html>
+<head></head>
+<body>
+<form method="post" enctype="multipart/form-data" action="/new">
   <label>Short name: 
     <input type="text" required="true" id="short" name="short_name" />
   </label>
@@ -30,9 +34,13 @@ module Webapp
     <input type="text" required="true" id="target" name="url"/>
   </label>
     <button type="submit">Submit</button>
-</form>|html}
+</form>
+</body>
+</html>|html}
     in
-    let headers = Headers.of_list [ "content-length", string_of_int (String.length form) ] in
+    let headers = Headers.of_list
+      [ "content-length", string_of_int (String.length form)
+      ; "content-type", "text/html; charset=utf-8" ] in
     Response.create ~headers `OK, Some form
 
   let uptime start_time =
